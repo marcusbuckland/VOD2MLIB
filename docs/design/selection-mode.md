@@ -417,7 +417,7 @@ stored in `selection.db`, not in plugin settings.
 
 ## 13. Testing
 
-- **`tests/test_selection.py`** (192 tests, no Django): a `FakeCatalogue` built from a small
+- **`tests/test_selection.py`** (202 tests, no Django): a `FakeCatalogue` built from a small
   spec; store and migrations in `tmp_path`; Apply, upkeep, relink and adoption against a
   temporary filesystem (add / remove / copy change / seasons / write-then-prune / only recorded
   files deleted / user files and NFOs preserved); the real HTTP handler on a local port (auth,
