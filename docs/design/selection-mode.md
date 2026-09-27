@@ -417,7 +417,7 @@ stored in `selection.db`, not in plugin settings.
 
 ## 13. Testing
 
-- **`tests/test_selection.py`** (177 tests, no Django): a `FakeCatalogue` built from a small
+- **`tests/test_selection.py`** (192 tests, no Django): a `FakeCatalogue` built from a small
   spec; store and migrations in `tmp_path`; Apply, upkeep, relink and adoption against a
   temporary filesystem (add / remove / copy change / seasons / write-then-prune / only recorded
   files deleted / user files and NFOs preserved); the real HTTP handler on a local port (auth,
@@ -439,13 +439,6 @@ probe all; preferences, ranking and per-title override; scheduled upkeep with fa
 visit; poster grid; provider, category and decade filters; and live checks of the cron,
 mode OFF, and fallback / restore.
 
-Related but separate PRs (classic mode, independent of this feature):
-
-- `fix/naming`: provider list tags (`EN-TOP - 02.`), dotted names, 4-letter provider tags
-  (`PRMT - `) and series/episode naming. Found while testing selection mode; changes folder
-  names for existing libraries.
-- `fix/series-copies`: classic series generation mixed two copies of a series on one account and
-  took episode titles from the shared `Episode.name` (§4.7).
-
-Selection mode writes files through the same naming helpers, so it picks up those fixes
-automatically once they land. The version bump and CHANGELOG are the maintainer's.
+Selection mode writes files through classic mode's naming helpers, so its folder and file
+names are exactly the ones classic mode would write. The version bump and CHANGELOG are the
+maintainer's.
