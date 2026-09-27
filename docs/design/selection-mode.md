@@ -153,8 +153,12 @@ tests/test_selection.py  # fake catalogue, tmp_path filesystem, real HTTP handle
   sha256 of the token is stored (`page_session`), tied to a sha256 of the password it was issued
   under, so changing the password ends every session. Sessions survive restarts.
 - State-changing requests need the header `X-VOD2MLIB: 1` (CSRF).
-- The page isn't behind Dispatcharr's authentication; the design target is a single user on a
-  LAN.
+- Login attempts are serialised and a failed one holds the lock for a second, so parallel
+  guesses can't beat one per second. Connections time out after 30 s; title ids in URLs must be
+  UUIDs.
+- The page isn't behind Dispatcharr's authentication and serves plain HTTP, like Dispatcharr's
+  own port; the design target is a single user on a trusted LAN. Built-in TLS would need
+  certificates or a dependency, so the README points to an HTTPS reverse proxy or a VPN instead.
 
 ### 6.3 JSON API
 
@@ -213,7 +217,8 @@ selection(kind, content_uuid,               -- PRIMARY KEY; kind 'movie' | 'seri
   tmdb_id,                                  -- remembered for relinking
   last_error, updated_at)
 
-applied_file(path PRIMARY KEY, kind, content_uuid)   -- every file Apply/upkeep/adoption wrote
+applied_file(path PRIMARY KEY, kind, content_uuid, adopted)   -- every file Apply/upkeep/adoption
+                                        -- claimed; adopted=1 for files adoption found on disk
 copy_probe(kind, account_id, stream_id, probed_at, result JSON, error)
 page_session(token_hash PRIMARY KEY, password_tag, expires_at)
 ```
@@ -294,7 +299,13 @@ when a title is first selected. Unselecting clears season exclusions.
      first refreshes the copy's episodes: one provider call, before anything is removed), then
      delete recorded files that aren't in it. Unchanged files keep their mtime, so the media
      server doesn't re-index.
-   - Existing `.nfo` files the plugin didn't write are never overwritten or claimed.
+   - Existing `.nfo` files the plugin didn't write are never overwritten or claimed, and
+     adopted ones are never rewritten (classic mode never overwrites an existing `.nfo`).
+   - An existing `.strm` it doesn't own is taken over only when it links to the same title (what
+     Scan library would adopt); any other file in the way fails the title.
+   - A path is owned by one title only: when two titles' names come out the same, the second
+     fails with "already belongs to …" instead of overwriting, or later deleting, the first's
+     files.
 3. `mark_applied` copies desired → applied per title as each succeeds, so a failure leaves the
    rest pending. It clears `duplicates` flags, and any flag once a title ends unselected.
 
@@ -306,7 +317,9 @@ naming produced the file. Episode → its `series_relation` → series copy; no 
 top-ranked copy. The preview lists titles to adopt, titles already known, duplicates, and files
 not adopted (content Dispatcharr no longer has, or not a Dispatcharr link). **Adopt** records
 each new title as selected and applied, with its `.strm`, sibling `.nfo` and `tvshow.nfo` in
-`applied_file`; nothing on disk changes. A title found in several places or as several copies
+`applied_file` (marked `adopted`); nothing on disk changes. Adopted `.nfo` files may hold user
+edits, so Apply never rewrites them; they go when the title is unselected, as classic Clean up
+would delete them. A title found in several places or as several copies
 gets `flag='duplicates'` and is pending until Apply tidies the extras. Unrecognised files are
 never recorded, so never deleted. **Skip** hides the banner.
 
@@ -314,7 +327,9 @@ never recorded, so never deleted. **Skip** hides the banner.
 
 Runs from the Celery task (`vod2mlib.scheduled_rescan` reads **live** settings, not the
 schedule snapshot, and in selection mode calls `runtime.run_scheduled_upkeep`) or from the
-page. Under the disk lease, for every **applied** title:
+page. The task fails closed: if the live settings can't be read, or selection mode is on but the
+selection package failed to import, the run is skipped with an error rather than risk a classic
+rescan of the whole catalogue. Under the disk lease, for every **applied** title:
 
 - **Copy still there:** rewrite its files (URL refresh; no-op writes keep mtimes). Series also
   get new episodes, except in excluded seasons. Series upkeep is additive inside the current
@@ -330,7 +345,8 @@ page. Under the disk lease, for every **applied** title:
 
 ### 9.5 Mass-loss guard
 
-If at least **5** applied titles, and more than **20%** of them, lose every copy in one run,
+If at least **5** applied titles, and more than **20%** of the titles it checks (those not
+already flagged `no_copy` or `duplicates`), lose every copy in one run,
 none of them are deleted or flagged; the run reports "N lost every copy at once; nothing
 deleted" with status `partial`. This covers a provider outage or Dispatcharr's mass delete
 (§4.9).
@@ -417,7 +433,7 @@ stored in `selection.db`, not in plugin settings.
 
 ## 13. Testing
 
-- **`tests/test_selection.py`** (202 tests, no Django): a `FakeCatalogue` built from a small
+- **`tests/test_selection.py`** (204 tests, no Django): a `FakeCatalogue` built from a small
   spec; store and migrations in `tmp_path`; Apply, upkeep, relink and adoption against a
   temporary filesystem (add / remove / copy change / seasons / write-then-prune / only recorded
   files deleted / user files and NFOs preserved); the real HTTP handler on a local port (auth,
