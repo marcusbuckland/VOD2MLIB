@@ -154,7 +154,7 @@ tests/test_selection.py  # fake catalogue, tmp_path filesystem, real HTTP handle
   under, so changing the password ends every session. Sessions survive restarts.
 - State-changing requests need the header `X-VOD2MLIB: 1` (CSRF).
 - Login attempts are serialised and a failed one holds the lock for a second, so parallel
-  guesses can't beat one per second. Connections time out after 30 s; title ids in URLs must be
+  guesses can't beat one per second; one queued more than 5 s gets a 429. Connections time out after 30 s; title ids in URLs must be
   UUIDs.
 - The page isn't behind Dispatcharr's authentication and serves plain HTTP, like Dispatcharr's
   own port; the design target is a single user on a trusted LAN. Built-in TLS would need
@@ -176,7 +176,7 @@ tests/test_selection.py  # fake catalogue, tmp_path filesystem, real HTTP handle
 | `GET /api/adopt`, `POST /api/adopt/scan`, `POST /api/adopt/apply`, `POST /api/adopt/skip` | Adoption of an existing library. |
 | `GET/PUT /api/prefs` | Preferences. |
 | `POST /api/seen/{kind}` | Mark all seen (moves the "new" clock). |
-| `POST /api/clear-flag/{kind}/{uuid}` | Dismiss a flag. |
+| `POST /api/clear-flag/{kind}/{uuid}` | Dismiss a flag (not `no_copy`, which is a state: 400). |
 
 ### 6.4 Page
 
@@ -293,7 +293,8 @@ when a title is first selected. Unselecting clears season exclusions.
 
 1. Takes the **disk lease** (`meta.disk_lease`, 6 h TTL) so Apply and upkeep never write at
    once, and checks the root folder is writable (a clear error otherwise).
-2. For each pending title:
+2. For each pending title, removals first (so a title taking over paths another is giving up in
+   the same Apply finds them free):
    - **Remove:** delete every recorded file, then folders left empty.
    - **Add / copy change / season change: write-then-prune.** Write the new file set (a series
      first refreshes the copy's episodes: one provider call, before anything is removed), then
@@ -302,7 +303,11 @@ when a title is first selected. Unselecting clears season exclusions.
    - Existing `.nfo` files the plugin didn't write are never overwritten or claimed, and
      adopted ones are never rewritten (classic mode never overwrites an existing `.nfo`).
    - An existing `.strm` it doesn't own is taken over only when it links to the same title (what
-     Scan library would adopt); any other file in the way fails the title.
+     Scan library would adopt), together with its `.nfo` and the show's `tvshow.nfo`, marked
+     `adopted`; any other file in the way fails the title. An adopted `.nfo` that goes missing is
+     written again and is the plugin's own from then on.
+   - Each path is claimed in `applied_file` before it is written (one query; none for paths the
+     title already owns).
    - A path is owned by one title only: when two titles' names come out the same, the second
      fails with "already belongs to …" instead of overwriting, or later deleting, the first's
      files.
@@ -339,6 +344,8 @@ rescan of the whole catalogue. Under the disk lease, for every **applied** title
   write before removing, `flag='fallback'`. The desired copy follows only if it was the applied
   one, so an un-Applied change is kept.
 - **No copy left:** delete the files, keep the title selected and applied, `flag='no_copy'`.
+  The flag is a state, not a notice: it can't be dismissed, and the title isn't counted or shown
+  as on disk; it clears when a copy returns or the title is unselected.
   A later run that finds a copy writes it back (`flag='fallback'`, "A copy is available
   again").
 - Desired-but-not-applied changes are left alone. The summary goes to `meta.last_upkeep`.
@@ -433,7 +440,7 @@ stored in `selection.db`, not in plugin settings.
 
 ## 13. Testing
 
-- **`tests/test_selection.py`** (204 tests, no Django): a `FakeCatalogue` built from a small
+- **`tests/test_selection.py`** (208 tests, no Django): a `FakeCatalogue` built from a small
   spec; store and migrations in `tmp_path`; Apply, upkeep, relink and adoption against a
   temporary filesystem (add / remove / copy change / seasons / write-then-prune / only recorded
   files deleted / user files and NFOs preserved); the real HTTP handler on a local port (auth,
